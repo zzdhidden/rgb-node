@@ -19,12 +19,12 @@ use rgb::psbt::RgbExt;
 use rgb::schema::{OwnedRightType, TransitionType};
 use rgb::seal::Revealed;
 use rgb::{
-    bundle, validation, Anchor, Assignment, BundleId, Consignment, ConsignmentType, ContractId,
-    ContractState, ContractStateMap, Disclosure, Genesis, InmemConsignment, Node, NodeId,
-    OwnedRights, PedersenStrategy, Schema, SchemaId, SealEndpoint, StateTransfer, Transition,
-    TransitionBundle, TypedAssignments, Validator, Validity,
+    bundle, validation, Anchor, Assignment, AttachmentStrategy, BundleId, Consignment,
+    ConsignmentType, ContractId, ContractState, ContractStateMap, Disclosure, Genesis,
+    InmemConsignment, Node, NodeId, OwnedRights, PedersenStrategy, Schema, SchemaId, SealEndpoint,
+    StateTransfer, Transition, TransitionBundle, TypedAssignments, Validator, Validity,
 };
-use rgb_rpc::{OutpointFilter, Reveal, TransferFinalize};
+use rgb_rpc::{FinalizeTransfersRes, OutpointFilter, Reveal, TransferFinalize};
 use storm::chunk::ChunkIdExt;
 use storm::{ChunkId, Container, ContainerId};
 use strict_encoding::StrictDecode;
@@ -282,30 +282,59 @@ impl Runtime {
 
                         let mut owned_rights: BTreeMap<OwnedRightType, TypedAssignments> = bmap! {};
                         for (owned_type, assignments) in transition.owned_rights().iter() {
-                            let outpoints = assignments.to_value_assignments();
+                            match assignments {
+                                TypedAssignments::Value(outpoints) => {
+                                    let mut assignment: Vec<Assignment<PedersenStrategy>> =
+                                        empty!();
 
-                            let mut revealed_assignment: Vec<Assignment<PedersenStrategy>> =
-                                empty!();
+                                    for out in outpoints.clone() {
+                                        if out.commit_conceal().to_confidential_seal()
+                                            != reveal_outpoint.to_concealed_seal()
+                                        {
+                                            assignment.push(out);
+                                        } else {
+                                            let accept = match out.as_revealed_state() {
+                                                Some(seal) => Assignment::Revealed {
+                                                    seal: reveal_outpoint,
+                                                    state: *seal,
+                                                },
+                                                _ => out,
+                                            };
+                                            assignment.push(accept);
+                                        }
+                                    }
 
-                            for out in outpoints {
-                                if out.commit_conceal().to_confidential_seal()
-                                    != reveal_outpoint.to_concealed_seal()
-                                {
-                                    revealed_assignment.push(out);
-                                } else {
-                                    let accept = match out.as_revealed_state() {
-                                        Some(seal) => Assignment::Revealed {
-                                            seal: reveal_outpoint,
-                                            state: *seal,
-                                        },
-                                        _ => out,
-                                    };
-                                    revealed_assignment.push(accept);
+                                    owned_rights
+                                        .insert(*owned_type, TypedAssignments::Value(assignment));
                                 }
-                            }
+                                TypedAssignments::Attachment(outpoints) => {
+                                    let mut assignment: Vec<Assignment<AttachmentStrategy>> =
+                                        empty!();
 
-                            owned_rights
-                                .insert(*owned_type, TypedAssignments::Value(revealed_assignment));
+                                    for out in outpoints.clone() {
+                                        if out.commit_conceal().to_confidential_seal()
+                                            != reveal_outpoint.to_concealed_seal()
+                                        {
+                                            assignment.push(out);
+                                        } else {
+                                            let accept = match out.as_revealed_state() {
+                                                Some(seal) => Assignment::Revealed {
+                                                    seal: reveal_outpoint,
+                                                    state: seal.clone(),
+                                                },
+                                                _ => out,
+                                            };
+                                            assignment.push(accept);
+                                        }
+                                    }
+
+                                    owned_rights.insert(
+                                        *owned_type,
+                                        TypedAssignments::Attachment(assignment),
+                                    );
+                                }
+                                _ => {}
+                            }
                         }
 
                         let tmp: Transition = Transition::with(
@@ -573,6 +602,52 @@ impl Runtime {
         self.store.store_sten(db::DISCLOSURES, txid, &disclosure)?;
 
         Ok(TransferFinalize { consignment, psbt })
+    }
+
+    pub(super) fn finalize_transfers(
+        &mut self,
+        transfers: Vec<(StateTransfer, Vec<SealEndpoint>)>,
+        mut psbt: Psbt,
+    ) -> Result<FinalizeTransfersRes, DaemonError> {
+        // 1. Pack LNPBP-4 and anchor information.
+        let mut bundles = psbt.rgb_bundles()?;
+        debug!("Found {} bundles", bundles.len());
+        trace!("Bundles: {:?}", bundles);
+
+        let anchor = Anchor::commit(&mut psbt)?;
+        trace!("Anchor: {:?}", anchor);
+
+        let mut consignments = vec![];
+        for (state_transfer, seal_endpoints) in &transfers {
+            let mut consignment = state_transfer.clone();
+            let contract_id = consignment.contract_id();
+            info!("Finalizing transfer for {}", contract_id);
+
+            // 2. Extract contract-related state transition from PSBT and put it
+            //    into consignment.
+            let bundle = bundles.remove(&contract_id).ok_or(FinalizeError::ContractBundleMissed)?;
+            let bundle_id = bundle.bundle_id();
+            consignment.push_anchored_bundle(anchor.to_merkle_proof(contract_id)?, bundle)?;
+
+            // 3. Add seal endpoints.
+            let endseals = seal_endpoints.clone();
+            for endseal in endseals {
+                consignment.push_seal_endpoint(bundle_id, endseal);
+            }
+
+            consignments.push(consignment);
+        }
+
+        // 4. Conceal all the state not related to the transfer.
+        // TODO: Conceal all the amounts except the last transition
+        // TODO: Conceal all seals outside of the paths from the endpoint to genesis
+
+        // 5. Construct and store disclosure for the blank transfers.
+        let txid = anchor.txid;
+        let disclosure = Disclosure::with(anchor, bundles, None);
+        self.store.store_sten(db::DISCLOSURES, txid, &disclosure)?;
+
+        Ok(FinalizeTransfersRes { consignments, psbt })
     }
 }
 
