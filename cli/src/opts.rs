@@ -17,6 +17,9 @@ use rgb::schema::TransitionType;
 use rgb::{Contract, ContractId, SealEndpoint};
 use rgb_rpc::{Reveal, RGB_NODE_RPC_ENDPOINT};
 
+use bitcoin::XOnlyPublicKey;
+use bitcoin_scripts::taproot::DfsPath;
+
 /// Command-line tool for working with RGB node
 #[derive(Parser, Clone, PartialEq, Eq, Debug)]
 #[clap(name = "rgb-cli", bin_name = "rgb-cli", author, version)]
@@ -253,5 +256,14 @@ pub enum ContractCommand {
         /// information. If not given, the source PSBT file is overwritten.
         #[clap(short = 'o', long = "out")]
         psbt_out: Option<PathBuf>,
+
+        /// Allows adding different forms of commitments to the change output,
+        /// if it is present.
+        #[clap(long)]
+        allow_tapret_path: Option<DfsPath>,
+
+        /// Set output taproot internal key
+        #[clap(long)]
+        output_tap_internal_key: Option<XOnlyPublicKey>,
     },
 }

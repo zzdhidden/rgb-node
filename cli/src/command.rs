@@ -23,9 +23,9 @@ use rgb::psbt::{RgbExt, RgbInExt};
 use rgb::{Node, StateTransfer, Transition, TransitionBundle};
 use rgb_rpc::{Client, ContractValidity};
 use strict_encoding::{StrictDecode, StrictEncode};
-
 use crate::opts::{ContractCommand, OutpointCommand, TransferCommand};
 use crate::{Command, Opts};
+use std::str::FromStr;
 
 #[derive(Debug, Display, Error, From)]
 #[display(inner)]
@@ -173,6 +173,8 @@ impl Exec for Opts {
                     contract_id,
                     psbt_in,
                     psbt_out,
+                    allow_tapret_path,
+                    output_tap_internal_key,
                 } => {
                     let contract = client.contract(contract_id, node_types, progress)?;
                     let psbt_bytes = fs::read(&psbt_in)?;
@@ -182,6 +184,18 @@ impl Exec for Opts {
                         return Ok(());
                     }
                     psbt.set_rgb_contract(contract)?;
+
+                    if !psbt.outputs[0].tapret_dfs_path().is_some() {
+                        if let Some(dfs_path) = allow_tapret_path.as_ref() {
+                            psbt.outputs[0].set_tapret_dfs_path(dfs_path)
+                                .expect("enabling tapret on change output");   
+                        }             
+                    }
+
+                    if !psbt.outputs[0].tap_internal_key.is_some() && output_tap_internal_key.is_some() {
+                        psbt.outputs[0].tap_internal_key = output_tap_internal_key
+                    }
+
                     let psbt_bytes = psbt.serialize();
                     fs::write(psbt_out.unwrap_or(psbt_in), psbt_bytes)?;
                 }

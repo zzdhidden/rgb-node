@@ -22,6 +22,7 @@ internet2 = "0.8.3"
 microservices = { version = "0.8.10", default-features = false, features = ["cli"] }
 bitcoin = "0.28.1"
 psbt = "0.8.0"
+bitcoin_scripts = { version = "0.8.2" }
 lnpbp = "0.8.0"
 rgb-std = { version = "0.8.0", features = ["serde"] }
 rgb_rpc = { version = "0.8.0", path = "../rpc" }
@@ -37,6 +38,7 @@ colored = "2"
 amplify = "3.12.1"
 strict_encoding = "~0.8.0"
 bitcoin = "0.28.1"
+bitcoin_scripts = { version = "0.8.2" }
 lnpbp = "0.8.0"
 clap = { version = "~3.1.18", features = ["derive", "env"] }
 clap_complete = "~3.1.4"
